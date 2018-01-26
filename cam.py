@@ -9,14 +9,67 @@ import aiohttp
 import aiofiles
 import io
 import string
+import os
+from sys import exc_info
+from os import path
+from os import listdir
 from time import sleep
 from time import time
 from picamera import PiCamera
 from datetime import datetime
+from random import random
 
 from config import token
 from config import gfyid
 from config import gfysecret
+
+lastframe = ''
+down = True
+dirs = {}
+dirs['home'] = '/home/pi/camera/' #OPTIONAL
+dirs['live'] = 'live'
+dirs['timelapse'] = 'timelapse'
+dirs['frames'] = 'timelapse/frames'
+dirs['clips'] = 'timelapse/clips'
+dirs['logs'] = 'logs'
+
+dirs = {k:path.join(dirs['home'],v) for k, v in dirs.items() if k != 'home'}
+
+
+
+async def iPic():
+  global down
+  while True and down:
+    print(time())
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')
+    timestampshort = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filepath = path.join(dirs['frames'],f'{timestampshort}.jpg')
+    
+    camera.annotate_text = timestamp
+    fPic = functools.partial(camera.capture,filepath,'jpeg',)
+    await client.loop.run_in_executor(None, fPic)
+    global lastframe
+    lastframe = filepath
+    
+    framefiles = listdir(dirs['frames'])
+    framefiles.sort()
+    if len(framefiles) > 250:
+      listfile = await aiofiles.open(path.join(dirs['frames'], 'frames.txt'), 'a+')
+      for ffile in framefiles:
+        await listfile.write(f'{path.join(dirs["frames"],ffile)}\n')
+      listfile.close()
+      
+      down = False
+      break
+      
+      print("Deleting frames")
+      for ffile in framefiles[:-1]:
+        os.remove(path.join(dirs['frames'],ffile))
+      os.remove(path.join(dirs['frames'],path.join(dirs['frames'], 'frames.txt')))
+      
+    print(time())
+    await asyncio.sleep(1-(time()-int(time())))
+    # await asyncio.sleep(0)
 
 def log(message):
   print(datetime.now().strftime('%Y-%m-%d %H:%M:%S: ')+message)
@@ -30,6 +83,18 @@ def valideffect(effect):
     return False
 
 async def cPic(message,params={}):
+  if down:
+    await client.send_typing(message.channel)
+    timestamp = f'Picture taken at:{datetime.fromtimestamp(path.getctime(lastframe)).strftime("%Y-%m-%d %H:%M:%S")} UTC'
+    
+    try:
+      await client.send_file(message.channel, lastframe , content=timestamp)
+    except discord.errors.HTTPException as e:
+      await client.send_message(message.channel, f'{message.author.mention} Upload failed with Error: `{str(e)}`')
+    except:
+      print(exc_info)
+      raise
+    return
   if params.get('help'):
     await client.send_message(message.channel, f'{message.author.mention} `!pic effect eff=effect`')
     return
@@ -43,9 +108,9 @@ async def cPic(message,params={}):
   timestamp = datetime.now().strftime('Picture taken at: %Y-%m-%d %H:%M:%S UTC ')
   timestampshort = datetime.now().strftime('%Y%m%d_%H%M%S')
   shortname = re.sub('[^0-9a-zA-Z]','',message.author.name)
-  filepath = f'/home/pi/camera/live/{timestampshort}_{shortname}_{message.author.id}.jpg'
+  filepath = path.join(dirs['live'],f'{timestampshort}_{shortname}_{message.author.id}.jpg')
   
-  thing = functools.partial(camera.capture,filepath,'jpeg',)
+  fPic = functools.partial(camera.capture,filepath,'jpeg',)
   
   effect = None
   if params.get('eff'):
@@ -60,7 +125,7 @@ async def cPic(message,params={}):
     try:
       camera.image_effect = effect or 'none'
       camera.resolution = (3280, 2464)
-      await client.loop.run_in_executor(None, thing)
+      await client.loop.run_in_executor(None, fPic)
       waiting = False
     except Exception as e:
       print(e)
@@ -70,22 +135,37 @@ async def cPic(message,params={}):
   except discord.errors.HTTPException as e:
     await client.send_message(message.channel, f'{message.author.mention} Upload failed with Error: `{str(e)}`')
   except:
-    print("Unexpected error:", sys.exc_info()[0])
+    print(exc_info)
     raise
 
 async def cGif(message,params={}):
+  if down:
+    await client.send_message(message.channel, f'Gifs are down while the bot is being rewritten.')
+    return
   if params.get('help'):
     await client.send_message(message.channel, f'{message.author.mention} `!gif/gfy/gfycat fps=1-30 s=1-59 eff=effects`')
     return
+    
+    
+  timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC ')
+  timestampshort = datetime.now().strftime('%Y%m%d_%H%M%S')
+  shortname = re.sub('[^0-9a-zA-Z]','',message.author.name)
+  filepath = path.join(dirs['live'],f'{timestampshort}_{shortname}.h264')
+    
+  embed = discord.Embed() 
+  embed.title = f'Recording GIF for {message.author.name}'
+  embed.type = 'rich'
+  embed.description = '' 
+  embed.colour = discord.Color.red()
+  embed.set_footer(text=timestamp)
+  field1 = embed.add_field(name='Status',value='Preparing',inline=True)
+  embedm = await client.send_message(message.channel,embed=embed)
+  
   if message.channel.is_private:
     await olog(f'{message.author.mention} requested a gif privately')
   else:
     await olog(f'{message.author.mention} requested a gif on \n {message.server.name}\\_{message.server.id}\\_{message.channel.mention}')
-  await client.send_typing(message.channel)
-  timestamp = datetime.now().strftime('Gfy taken at: %Y-%m-%d %H:%M:%S UTC ')
-  timestampshort = datetime.now().strftime('%Y%m%d_%H%M%S')
-  shortname = re.sub('[^0-9a-zA-Z]','',message.author.name)
-  filepath = f'/home/pi/camera/live/{timestampshort}_{shortname}.h264'
+  
   
   try:
     delay = max(1,min(int(params.get('s')),59,))
@@ -108,6 +188,9 @@ async def cGif(message,params={}):
   start = functools.partial(camera.start_recording,filepath, format='h264')
   
   waiting = True
+  
+  field1 = embed.set_field_at(index=0,name='Status',value='Waiting for Camera',inline=True)
+  await client.edit_message(embedm,embed=embed)
   while waiting:
     try:
       camera.image_effect = effect or 'none'
@@ -118,6 +201,9 @@ async def cGif(message,params={}):
     except Exception as e:
       await asyncio.sleep(1)
       print(e)
+  field1 = embed.set_field_at(index=0,name='Status',value='Recording',inline=True)
+  embed.colour = discord.Color(0xFFFF00)
+  await client.edit_message(embedm,embed=embed)
   waituntil = time() + delay
   while waituntil >= time():
     try:
@@ -144,6 +230,10 @@ async def cGif(message,params={}):
       "client_secret": gfysecret,
       "grant_type": "client_credentials"
   }
+  
+  field1 = embed.set_field_at(index=0,name='Status',value='Uploading',inline=True)
+  embed.colour = discord.Color.green()
+  await client.edit_message(embedm,embed=embed)
   async with session.post('https://api.gfycat.com/v1/oauth/token', data=str(data)) as rt:
     rtjson = await rt.json()
     token = f"Bearer {rtjson['access_token']}"
@@ -153,7 +243,6 @@ async def cGif(message,params={}):
     
   gfyname = ""
   
-  await client.send_typing(message.channel)
   
   async with session.post('https://api.gfycat.com/v1/gfycats', headers=headers) as r:
     rjson = await r.json()
@@ -173,32 +262,50 @@ async def cGif(message,params={}):
           
           # print(len(body))
           # mpwriter.headers[aiohttp.hdrs.CONTENT_LENGTH] = str(len(body))
-          await client.send_typing(message.channel)
           async with session.request('post','https://filedrop.gfycat.com', data=body, headers = mpwriter.headers) as r2:
             pass
     else:
       print(rjson)
   waiting = True
+  first = True
+  oldprogress = ''
+  progress = '0'
   while waiting:
     async with session.request('get',f'https://api.gfycat.com/v1/gfycats/fetch/status/{gfyname}', headers=headers2) as r3: 
+    
       r3json = await r3.json()
-      print(r3json)
       if 'gfyname' in r3json:
         gfyname = r3json['gfyname']
         waiting = False
       elif 'errorMessage' in r3json:
         await client.send_message(message.channel, f'{message.author.mention} Upload failed with Error: `{r3json["errorMessage"]["code"]} : {r3json["errorMessage"]["description"]}`')
+        await client.delete_message(embedm)
         return
-      # elif 'asd' in rjson3:
+      elif 'task' in r3json:
+        if r3json['task'] == 'encoding':
+          if first:
+            field1 = embed.set_field_at(index=0,name='Status',value='Encoding',inline=True)
+            field2 = embed.add_field(name='Progress',value='0',inline=True)
+            first = False
+          if 'progress' in r3json:
+            field2 = embed.set_field_at(index=1,name='Progress',value=r3json['progress'],inline=True)
+            progress = r3json['progress']
+          
+          if oldprogress != progress:
+            oldprogress = progress
+            await client.edit_message(embedm,embed=embed)
+          await asyncio.sleep(1)
       else:
-        await client.send_typing(message.channel)
-        await asyncio.sleep(1)
+          await asyncio.sleep(1)
             
   gfylink = f'https://gfycat.com/{gfyname}'
-  gfylog = await aiofiles.open('gfy.log','a',loop=client.loop)
+  gfylog = await aiofiles.open(path.join(dirs['logs'],'gfy.log'),'a+',loop=client.loop)
   await gfylog.write(f'\n{gfylink}')
   await gfylog.close()
-  await client.send_message(message.channel, f'{timestamp} \n {gfylink}')
+  
+  await client.delete_message(embedm)
+  await client.send_message(message.channel, f'Gfy taken at: {timestamp} \n {gfylink}')
+
        
 async def cEffects(message,params={}):
     effectnames = "```"
@@ -233,12 +340,32 @@ async def botcommand(message):
     return 1
   return 0
 
+for k,dir in dirs.items():
+  if not os.path.exists(dir):
+    log(f'Did not find {dir}. Creating...')
+    os.mkdir(dir)
+
+    
+framefiles = listdir(dirs['frames'])
+if len(framefiles) > 0:
+  log(f'Frames directory not empty, deleting {len(framefiles)} files...')
+  for ffile in framefiles:
+      if path.splitext(ffile)[1] == '.jpg' or ffile == 'frames.txt':
+        os.remove(path.join(dirs['frames'],ffile))
+      else:
+        print(f'FRAME DIRECTORY ({dirs["frames"]}) IS NOT EMPTY. REMOVE FILE {ffile}.')
+        exit()
+    
+
+  
 client = discord.Client()
 session = aiohttp.ClientSession(loop=client.loop)
 me = discord.Object('103294721119494144')
 unesco = discord.Object('287618635831443456')
 camera = PiCamera()
+camera.start_preview()
 camera.resolution = (3280, 2464)
+
 userswaiting = []
 commands = [
   [['effects'],cEffects],
@@ -246,7 +373,7 @@ commands = [
   [['pic'],cPic],
 ]
 
-  
+client.loop.create_task(iPic())
 
 @client.event
 async def on_ready():
