@@ -25,6 +25,9 @@ from config import gfysecret
 
 lastframe = ''
 down = True
+lowpower = True
+if lowpower:
+  down = False
 dirs = {}
 dirs['home'] = '/home/pi/camera/' #OPTIONAL
 dirs['live'] = 'live'
@@ -39,7 +42,7 @@ dirs = {k:path.join(dirs['home'],v) for k, v in dirs.items() if k != 'home'}
 
 async def iPic():
   global down
-  while True and down:
+  while True and down and not lowpower:
     print(time())
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')
     timestampshort = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -83,7 +86,8 @@ def valideffect(effect):
     return False
 
 async def cPic(message,params={}):
-  if down:
+  global camera
+  if down and not lowpower:
     await client.send_typing(message.channel)
     timestamp = f'Picture taken at:{datetime.fromtimestamp(path.getctime(lastframe)).strftime("%Y-%m-%d %H:%M:%S")} UTC'
     
@@ -102,7 +106,10 @@ async def cPic(message,params={}):
     await olog(f'{message.author.mention} requested a pic privately')
   else:
     await olog(f'{message.author.mention} requested a pic on \n {message.server.name}\\_{message.server.id}\\_{message.channel.mention}')
-  
+  if lowpower and camera.closed:
+    camera = PiCamera()
+  # await asyncio.sleep(0.5)
+  camera.start_preview()
           
   await client.send_typing(message.channel)
   timestamp = datetime.now().strftime('Picture taken at: %Y-%m-%d %H:%M:%S UTC ')
@@ -130,6 +137,8 @@ async def cPic(message,params={}):
     except Exception as e:
       print(e)
       await asyncio.sleep(1)
+  if lowpower:
+    camera.close()
   try:
     await client.send_file(message.channel, filepath , content=timestamp)
   except discord.errors.HTTPException as e:
@@ -139,13 +148,17 @@ async def cPic(message,params={}):
     raise
 
 async def cGif(message,params={}):
+  global camera
   if down:
     await client.send_message(message.channel, f'Gifs are down while the bot is being rewritten.')
     return
   if params.get('help'):
     await client.send_message(message.channel, f'{message.author.mention} `!gif/gfy/gfycat fps=1-30 s=1-59 eff=effects`')
     return
-    
+  if lowpower and camera.closed:
+    camera = PiCamera()
+  # await asyncio.sleep(3)
+  camera.start_preview()
     
   timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC ')
   timestampshort = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -212,6 +225,8 @@ async def cGif(message,params={}):
     except Exception as e:
       print(e)
   camera.stop_recording()
+  if lowpower:
+    camera.close()
   
   filepathmp4 = f"{filepath[:-5]}.mp4" 
   command = f"MP4Box -add {filepath} {filepathmp4}"
@@ -305,7 +320,6 @@ async def cGif(message,params={}):
   
   await client.delete_message(embedm)
   await client.send_message(message.channel, f'Gfy taken at: {timestamp} \n {gfylink}')
-
        
 async def cEffects(message,params={}):
     effectnames = "```"
@@ -314,6 +328,30 @@ async def cEffects(message,params={}):
     effectnames = f"{effectnames}```"
     await client.send_message(message.channel, effectnames )
 
+async def cReload(message,params={}):
+  if message.author != me:
+    await client.send_message(message.channel, "You can't tell me what to do!" )
+    return
+  await client.send_message(message.channel, "Will do." )
+  async with aiofiles.open(path.join(dirs['logs'],'reload'),('w+')) as reloadfile:
+    await reloadfile.write(message.channel.id)
+  await client.logout()
+  session.close()
+  exit()
+
+async def cShutdown(message,params={}):
+  if message.author != me:
+    await client.send_message(message.channel, "I hope you never wake up." )
+    return
+  await client.send_message(message.channel, "Sleep tight." )
+  async with aiofiles.open(path.join(dirs['logs'],'reload'),('w+')) as reloadfile:
+    await reloadfile.write(message.channel.id)
+  await client.logout()
+  session.close()
+  command = "/usr/bin/sudo /sbin/shutdown now"
+  subprocess.call(command.split())
+  
+    
 async def botcommand(message):
   params = {}
   if message.content.startswith("!"):
@@ -371,6 +409,8 @@ commands = [
   [['effects'],cEffects],
   [['gif','gfy','gfycat'],cGif],
   [['pic'],cPic],
+  [['reload','restart'],cReload],
+  [['goodnight','shutdown'],cShutdown]
 ]
 
 client.loop.create_task(iPic())
@@ -397,6 +437,12 @@ async def on_ready():
         await olog(message.author.mention+" "+message.content)   
         await client.add_reaction(message, '\U00002705')
 
+  if path.isfile(path.join(dirs['logs'],'reload')):
+    async with aiofiles.open(path.join(dirs['logs'],'reload'),('r')) as reloadfile:
+      await client.send_message(discord.Object(await reloadfile.read()),"I'm back.")
+    os.remove(path.join(dirs['logs'],'reload'))
+      
+        
   await olog("I'm running :)")    
   await client.change_presence(game=discord.Game(name='Live Pictures'))    
 
@@ -405,7 +451,7 @@ async def on_ready():
 async def on_message(message):
   res = await botcommand(message)
   if res==0:
-    if message.channel.is_private and message.author != client.user and message.author != owner:
+    if message.channel.is_private and message.author != client.user and message.author != me:
       await olog(message.author.mention+" "+message.content)   
       await client.add_reaction(message, '\U00002705')
   if res==1:
