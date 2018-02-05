@@ -106,9 +106,11 @@ async def cPic(message,params={}):
     await olog(f'{message.author.mention} requested a pic privately')
   else:
     await olog(f'{message.author.mention} requested a pic on \n {message.server.name}\\_{message.server.id}\\_{message.channel.mention}')
-  if lowpower and camera.closed:
+  if lowpower
+    while not camera.closed:
+      await asyncio.sleep(0.1)
     camera = PiCamera()
-  # await asyncio.sleep(0.5)
+  # await asyncio.sleep(0.5)gfi
   camera.start_preview()
           
   await client.send_typing(message.channel)
@@ -155,9 +157,10 @@ async def cGif(message,params={}):
   if params.get('help'):
     await client.send_message(message.channel, f'{message.author.mention} `!gif/gfy/gfycat fps=1-30 s=1-59 eff=effects`')
     return
-  if lowpower and camera.closed:
+  if lowpower
+    while not camera.closed:
+      await asyncio.sleep(0.1)
     camera = PiCamera()
-  # await asyncio.sleep(3)
   camera.start_preview()
     
   timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC ')
