@@ -24,6 +24,9 @@ from config import gfyid
 from config import gfysecret
 
 lastframe = ''
+temp = True
+tempid = '28-05168455e3ff'
+tempx = 0
 down = True
 lowpower = True
 if lowpower:
@@ -42,35 +45,45 @@ dirs = {k:path.join(dirs['home'],v) for k, v in dirs.items() if k != 'home'}
 
 async def iPic():
   global down
-  while True and down and not lowpower:
-    print(time())
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')
-    timestampshort = datetime.now().strftime('%Y%m%d_%H%M%S')
-    filepath = path.join(dirs['frames'],f'{timestampshort}.jpg')
-    
-    camera.annotate_text = timestamp
-    fPic = functools.partial(camera.capture,filepath,'jpeg',)
-    await client.loop.run_in_executor(None, fPic)
-    global lastframe
-    lastframe = filepath
-    
-    framefiles = listdir(dirs['frames'])
-    framefiles.sort()
-    if len(framefiles) > 250:
-      listfile = await aiofiles.open(path.join(dirs['frames'], 'frames.txt'), 'a+')
-      for ffile in framefiles:
-        await listfile.write(f'{path.join(dirs["frames"],ffile)}\n')
-      listfile.close()
+  global tempx
+  while True:
+    if temp:
+      async with aiofiles.open(f'/sys/bus/w1/devices/{tempid}/w1_slave','r') as tempData:
+        param = re.search('t=(\d+)',await tempData.read())
+        if param:
+          tempx = int(param.group(1)) / 1000
+        else:
+          tempx = -69
+        
+    if down and not lowpower:
+      print(time())
+      timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')
+      timestampshort = datetime.now().strftime('%Y%m%d_%H%M%S')
+      filepath = path.join(dirs['frames'],f'{timestampshort}.jpg')
       
-      down = False
-      break
+      camera.annotate_text = timestamp
+      fPic = functools.partial(camera.capture,filepath,'jpeg',)
+      await client.loop.run_in_executor(None, fPic)
+      global lastframe
+      lastframe = filepath
       
-      print("Deleting frames")
-      for ffile in framefiles[:-1]:
-        os.remove(path.join(dirs['frames'],ffile))
-      os.remove(path.join(dirs['frames'],path.join(dirs['frames'], 'frames.txt')))
-      
-    print(time())
+      framefiles = listdir(dirs['frames'])
+      framefiles.sort()
+      if len(framefiles) > 250:
+        listfile = await aiofiles.open(path.join(dirs['frames'], 'frames.txt'), 'a+')
+        for ffile in framefiles:
+          await listfile.write(f'{path.join(dirs["frames"],ffile)}\n')
+        listfile.close()
+        
+        down = False
+        break
+        
+        print("Deleting frames")
+        for ffile in framefiles[:-1]:
+          os.remove(path.join(dirs['frames'],ffile))
+        os.remove(path.join(dirs['frames'],path.join(dirs['frames'], 'frames.txt')))
+        
+      print(time())
     await asyncio.sleep(1-(time()-int(time())))
     # await asyncio.sleep(0)
 
@@ -89,7 +102,7 @@ async def cPic(message,params={}):
   global camera
   if down and not lowpower:
     await client.send_typing(message.channel)
-    timestamp = f'Picture taken at:{datetime.fromtimestamp(path.getctime(lastframe)).strftime("%Y-%m-%d %H:%M:%S")} UTC'
+    timestamp = f'Picture taken at:{datetime.fromtimestamp(path.getctime(lastframe)).strftime("%Y-%m-%d %H:%M:%S")} UTC \n **Temperature:** {round(tempx,2)}°C '
     
     try:
       await client.send_file(message.channel, lastframe , content=timestamp)
@@ -106,7 +119,7 @@ async def cPic(message,params={}):
     await olog(f'{message.author.mention} requested a pic privately')
   else:
     await olog(f'{message.author.mention} requested a pic on \n {message.server.name}\\_{message.server.id}\\_{message.channel.mention}')
-  if lowpower
+  if lowpower:
     while not camera.closed:
       await asyncio.sleep(0.1)
     camera = PiCamera()
@@ -114,7 +127,9 @@ async def cPic(message,params={}):
   camera.start_preview()
           
   await client.send_typing(message.channel)
-  timestamp = datetime.now().strftime('Picture taken at: %Y-%m-%d %H:%M:%S UTC ')
+  
+  timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+  timestamp = f'Picture taken at: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")} UTC \n**Temperature:** {round(tempx,2)}°C '
   timestampshort = datetime.now().strftime('%Y%m%d_%H%M%S')
   shortname = re.sub('[^0-9a-zA-Z]','',message.author.name)
   filepath = path.join(dirs['live'],f'{timestampshort}_{shortname}_{message.author.id}.jpg')
@@ -157,7 +172,7 @@ async def cGif(message,params={}):
   if params.get('help'):
     await client.send_message(message.channel, f'{message.author.mention} `!gif/gfy/gfycat fps=1-30 s=1-59 eff=effects`')
     return
-  if lowpower
+  if lowpower:
     while not camera.closed:
       await asyncio.sleep(0.1)
     camera = PiCamera()
@@ -303,10 +318,11 @@ async def cGif(message,params={}):
         if r3json['task'] == 'encoding':
           if first:
             field1 = embed.set_field_at(index=0,name='Status',value='Encoding',inline=True)
-            field2 = embed.add_field(name='Progress',value='0',inline=True)
+            field2 = embed.add_field(name='Progress',value='0%',inline=True)
             first = False
           if 'progress' in r3json:
-            field2 = embed.set_field_at(index=1,name='Progress',value=r3json['progress'],inline=True)
+            pvalue = round(float(r3json['progress']) / 1.17  * 100,2)
+            field2 = embed.set_field_at(index=1,name='Progress',value=f'{pvalue}%',inline=True)
             progress = r3json['progress']
           
           if oldprogress != progress:
@@ -320,10 +336,10 @@ async def cGif(message,params={}):
   gfylog = await aiofiles.open(path.join(dirs['logs'],'gfy.log'),'a+',loop=client.loop)
   await gfylog.write(f'\n{gfylink}')
   await gfylog.close()
-  
+   
   await client.delete_message(embedm)
-  await client.send_message(message.channel, f'Gfy taken at: {timestamp} \n {gfylink}')
-       
+  await client.send_message(message.channel, f'Gfy taken at: {timestamp} \n**Temperature:** {round(tempx,2)}°C \n{gfylink}')
+     
 async def cEffects(message,params={}):
     effectnames = "```"
     for effectname in PiCamera.IMAGE_EFFECTS:
@@ -354,7 +370,11 @@ async def cShutdown(message,params={}):
   command = "/usr/bin/sudo /sbin/shutdown now"
   subprocess.call(command.split())
   
-    
+async def cTemp(message,params={}):
+  if tempx == -69:
+    await client.send_message(message.channel, "Something went wrong." )
+  await client.send_message(message.channel, f"Current Temperature: {round(tempx,2)}°C" )
+  
 async def botcommand(message):
   params = {}
   if message.content.startswith("!"):
@@ -406,6 +426,8 @@ unesco = discord.Object('287618635831443456')
 camera = PiCamera()
 camera.start_preview()
 camera.resolution = (3280, 2464)
+if lowpower:
+  camera.close()
 
 userswaiting = []
 commands = [
@@ -413,7 +435,8 @@ commands = [
   [['gif','gfy','gfycat'],cGif],
   [['pic'],cPic],
   [['reload','restart'],cReload],
-  [['goodnight','shutdown'],cShutdown]
+  [['goodnight','shutdown'],cShutdown],
+  [['temp','temperature'],cTemp]
 ]
 
 client.loop.create_task(iPic())
@@ -445,8 +468,10 @@ async def on_ready():
       await client.send_message(discord.Object(await reloadfile.read()),"I'm back.")
     os.remove(path.join(dirs['logs'],'reload'))
       
-        
-  await olog("I'm running :)")    
+  
+  async with session.get("http://icanhazip.com/") as IP:
+    IPtext = await IP.read()
+    await olog(f"I'm running :) {IPtext}")    
   await client.change_presence(game=discord.Game(name='Live Pictures'))    
 
   
