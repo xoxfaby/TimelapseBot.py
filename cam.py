@@ -1,5 +1,4 @@
 
-import requests
 import discord
 import asyncio
 import functools
@@ -29,15 +28,18 @@ from config import tempid
 
 from zalgo import zalgo
 
+
+
 lastframe = ''
 lowpower = True
-dirs = {}
-dirs['home'] = '/home/pi/camera/' #OPTIONAL
-dirs['live'] = 'live'
-dirs['timelapse'] = 'timelapse'
-dirs['frames'] = 'timelapse/frames'
-dirs['clips'] = 'timelapse/clips'
-dirs['logs'] = 'logs'
+dirs = {
+  'home':'/home/pi/camera/',
+  'live':'live',
+  'timelapse':'timelapse',
+  'frames':'timelapse/frames',
+  'clips':'timelapse/clips',
+  'logs':'logs'
+}
 
 dirs = {k:path.join(dirs['home'],v) for k, v in dirs.items() if k != 'home'}
 
@@ -83,8 +85,6 @@ async def iPic():
     await asyncio.sleep(1-(time()-int(time())))
   # await asyncio.sleep(0)
 
-def log(message):
-  print(datetime.now().strftime('%Y-%m-%d %H:%M:%S: ')+message)
 async def olog(message):
   await client.send_message(me, message)
 
@@ -353,6 +353,7 @@ async def cStatus(message,params={}):
     tIP = str(await IP.text())[:-1]
     for iface in netifaces.interfaces():
       for addr in netifaces.ifaddresses(iface).get(netifaces.AF_INET, {}):
+        await olog(str(addr))
         if addr.get('addr') == tIP:
           xiface = iface
   pping = subprocess.Popen(['ping','-c 1', '8.8.8.8'],stdout=subprocess.PIPE)
@@ -382,13 +383,13 @@ async def cStatus(message,params={}):
 
 for k,dir in dirs.items():
   if not os.path.exists(dir):
-    log(f'Did not find {dir}. Creating...')
+    print(f'Did not find {dir}. Creating...')
     os.mkdir(dir)
 
     
 framefiles = listdir(dirs['frames'])
 if len(framefiles) > 0:
-  log(f'Frames directory not empty, deleting {len(framefiles)} files...')
+  print(f'Frames directory not empty, deleting {len(framefiles)} files...')
   for ffile in framefiles:
       if path.splitext(ffile)[1] == '.jpg' or ffile == 'frames.txt':
         os.remove(path.join(dirs['frames'],ffile))
@@ -406,8 +407,6 @@ camera.close()
   
 client = discord.Client()
 session = aiohttp.ClientSession(loop=client.loop)
-me = discord.Object('103294721119494144')
-unesco = discord.Object('287618635831443456')
 
 userswaiting = []
 commands = [
@@ -424,19 +423,19 @@ client.loop.create_task(iPic())
 
 @client.event
 async def on_ready():
-  log('Logged in as:')
-  log(client.user.name)
-  log(client.user.id)
-  log('Connected to:')
-  global unesco
-  global me
+  print('Logged in as:')
+  print(client.user.name)
+  print(client.user.id)
+  print('Connected to:')
+  me = discord.Object('103294721119494144')
+  unesco = discord.Object('287618635831443456')
   for server in client.servers:
     if server.id == unesco.id:     
       unesco = server
       me = server.owner
-    log(server.id)
-    log(server.name)
-    log(server.owner.name)
+    print(server.id)
+    print(server.name)
+    print(server.owner.name)
     
   for privatechannel in client.private_channels:
     async for message in client.logs_from(privatechannel, limit=100):
@@ -465,10 +464,8 @@ async def on_message(message):
       await client.send_message(message.channel, "Sorry, no private commands at the moment." )
     return
   params = {}
-  cmd = None
   if message.server.me in message.mentions and message.author != message.server.me:
-    smessage = message.content.split()
-    for pmessage in smessage:
+    for pmessage in message.content.split()
       for command in commands:
         if pmessage in command[0]:
           if command[2]:
