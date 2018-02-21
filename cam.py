@@ -404,7 +404,8 @@ if len(framefiles) > 0:
 
 camera = PiCamera()
 camera.close()
-  
+
+me = discord.Object('103294721119494144')  
 client = discord.Client()
 session = aiohttp.ClientSession(loop=client.loop)
 
@@ -423,11 +424,11 @@ client.loop.create_task(iPic())
 
 @client.event
 async def on_ready():
+  global me
   print('Logged in as:')
   print(client.user.name)
   print(client.user.id)
   print('Connected to:')
-  me = discord.Object('103294721119494144')
   unesco = discord.Object('287618635831443456')
   for server in client.servers:
     if server.id == unesco.id:     
@@ -465,7 +466,7 @@ async def on_message(message):
     return
   params = {}
   if message.server.me in message.mentions and message.author != message.server.me:
-    for pmessage in message.content.split()
+    for pmessage in message.content.split():
       for command in commands:
         if pmessage in command[0]:
           if command[2]:
