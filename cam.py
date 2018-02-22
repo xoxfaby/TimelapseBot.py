@@ -28,7 +28,7 @@ from config import tempid
 
 from zalgo import zalgo
 
-
+class CommandFound(Exception): pass
 
 lastframe = ''
 lowpower = True
@@ -45,13 +45,28 @@ dirs = {k:path.join(dirs['home'],v) for k, v in dirs.items() if k != 'home'}
 
 
 async def getTemp():
-  async with aiofiles.open(f'/sys/bus/w1/devices/{tempid}/w1_slave','r') as tempData:
-    param = re.search('t=(\d+)',await tempData.read())
-    if param:
-      return int(param.group(1)) / 1000
-    else:
-      return False
-    return False
+  try:
+    async with aiofiles.open(f'/sys/bus/w1/devices/{tempid}/w1_slave','r') as tempData:
+      param = re.search('t=(\d+)',await tempData.read())
+      xtemp = int(param.group(1)) / 1000
+  except:
+    xtemp = -69
+  
+  try:
+    with subprocess.Popen(['/opt/vc/bin/vcgencmd','measure_temp'],stdout=subprocess.PIPE) as pcputemp:
+      while pcputemp.poll() is None:
+        await asyncio.sleep(0.05)
+      xgputemp = float(re.search("temp=(.*?)'C", str(pcputemp.stdout.read()) ).group(1))
+  except:
+    xgputemp = -69
+  
+  try:
+    fcputemp = await aiofiles.open('/sys/class/thermal/thermal_zone0/temp','r')
+    xcputemp = float(await fcputemp.read())/1000
+  except:
+    xcputemp = -69
+    
+  return xtemp, xcputemp, xgputemp
 
 async def iPic():  
   while not lowpower:
@@ -95,10 +110,13 @@ def valideffect(effect):
     return False
 
 async def cPic(message,params={}):
+  '''Takes a live picture from the bot.
+Parameters: effectname, eff=effectname
+Get valid effects from the effects command'''
   if params.get('help'):
     await client.send_message(message.channel, f'{message.author.mention} `!pic effect eff=effect`')
     return
-  xtemp = await getTemp()
+  xtemp,_,_ = await getTemp()
   if not lowpower:
     await client.send_typing(message.channel)
     timestamp = f'Picture taken at:{datetime.fromtimestamp(path.getctime(lastframe)).strftime("%Y-%m-%d %H:%M:%S")} UTC+1 \n **Temperature:** {round(xtemp,2)}°C '
@@ -147,6 +165,9 @@ async def cPic(message,params={}):
       raise
 
 async def cGif(message,params={}):
+  '''Takes a live gif from the bot.
+Parameters: effectname, eff=effectname, s=ength_seconds, fps=fps
+Get valid effects from the effects command'''
   if not lowpower:
     await client.send_message(message.channel, f'Gifs are not available in timelapse mode.')
     return
@@ -228,6 +249,10 @@ async def cGif(message,params={}):
     output = subprocess.check_output(command, stderr=subprocess.STDOUT, shell=True)
   except subprocess.CalledProcessError as e:
     print('FAIL:\ncmd:{}\noutput:{}'.format(e.cmd, e.output))
+    field1 = embed.set_field_at(index=0,name='Status',value='FAILED',inline=True)
+    embed.colour = discord.Color(0xFF0000)
+    await client.edit_message(embedm,embed=embed)
+    return
     
 
   data = {  
@@ -249,28 +274,38 @@ async def cGif(message,params={}):
   gfyname = ""
   
   
-  async with session.post('https://api.gfycat.com/v1/gfycats', headers=headers) as r:
-    rjson = await r.json()
-    if rjson['isOk']:  
-      gfyname = rjson['gfyname']
-      async with aiofiles.open(filepathmp4,mode='rb',loop=client.loop) as f:
-        fgfy = await f.read()
-        
-        with aiohttp.MultipartWriter('form-data') as mpwriter:
+  try:
+    async with session.post('https://api.gfycat.com/v1/gfycats', headers=headers) as r:
+      rjson = await r.json()
+      if rjson['isOk']:  
+        gfyname = rjson['gfyname']
+        async with aiofiles.open(filepathmp4,mode='rb',loop=client.loop) as f:
+          fgfy = await f.read()
           
-          
-          part = mpwriter.append((rjson['gfyname']))
-          part.set_content_disposition('form-data', name='key')
-          part2 = mpwriter.append(fgfy,{'CONTENT-TYPE': 'video/mp4'})  
-          part2.set_content_disposition('form-data', name='file', filename=rjson['gfyname'])
-          body = b''.join(mpwriter.serialize())
-          
-          # print(len(body))
-          # mpwriter.headers[aiohttp.hdrs.CONTENT_LENGTH] = str(len(body))
-          async with session.request('post','https://filedrop.gfycat.com', data=body, headers = mpwriter.headers) as r2:
-            pass
-    else:
-      print(rjson)
+          with aiohttp.MultipartWriter('form-data') as mpwriter:
+            
+            
+            part = mpwriter.append((rjson['gfyname']))
+            part.set_content_disposition('form-data', name='key')
+            part2 = mpwriter.append(fgfy,{'CONTENT-TYPE': 'video/mp4'})  
+            part2.set_content_disposition('form-data', name='file', filename=rjson['gfyname'])
+            body = b''.join(mpwriter.serialize())
+            
+            # print(len(body))
+            # mpwriter.headers[aiohttp.hdrs.CONTENT_LENGTH] = str(len(body))
+            async with session.request('post','https://filedrop.gfycat.com', data=body, headers = mpwriter.headers) as r2:
+              pass
+      else:
+        print(rjson)
+  except:
+    embed.set_field_at(index=0,name='Status',value='FAILED',inline=True)
+    embed.add_field(name='Error',value='Failed during upload',inline=True)
+    embed.colour = discord.Color(0xFF0000)
+    await client.edit_message(embedm,embed=embed)
+    return
+    
+  field1 = embed.set_field_at(index=0,name='Status',value='Waiting for gfycat',inline=True)
+  await client.edit_message(embedm,embed=embed)
   first = True
   oldprogress = ''
   progress = '0'
@@ -281,9 +316,15 @@ async def cGif(message,params={}):
       if 'gfyname' in r3json:
         gfyname = r3json['gfyname']
         break
-      elif 'errorMessage' in r3json:
-        await client.send_message(message.channel, f'{message.author.mention} Upload failed with Error: `{r3json["errorMessage"]["code"]} : {r3json["errorMessage"]["description"]}`')
-        await client.delete_message(embedm)
+      elif 'errorMessage' in r3json:  
+        field1 = embed.set_field_at(index=0,name='Status',value='FAILED',inline=True)
+        try:
+          embed.set_field_at(index=1,name='Error',value=f'{message.author.mention} Upload failed with Error: `{r3json["errorMessage"]["code"]} : {r3json["errorMessage"]["description"]}`',inline=True)
+        except:
+          embed.add_field(name='Error',value=f'`{r3json["errorMessage"]["code"]} : {r3json["errorMessage"]["description"]}`',inline=True)
+        embed.colour = discord.Color.red()
+        await client.edit_message(embedm,embed=embed)
+        
         return
       elif 'task' in r3json:
         if r3json['task'] == 'encoding':
@@ -309,17 +350,19 @@ async def cGif(message,params={}):
   await gfylog.close()
    
   await client.delete_message(embedm)
-  xtemp = await getTemp()
+  xtemp,_,_ = await getTemp()
   await client.send_message(message.channel, f'Gfy taken at: {timestamp} \n**Temperature:** {round(xtemp,2)}°C \n{gfylink}')
      
 async def cEffects(message,params={}):
-    effectnames = "```"
-    for effectname in PiCamera.IMAGE_EFFECTS:
-      effectnames = f"{effectnames}\n{effectname}"
-    effectnames = f"{effectnames}```"
-    await client.send_message(message.channel, effectnames )
+  '''Lists all available image/video effects'''
+  effectnames = "```"
+  for effectname in PiCamera.IMAGE_EFFECTS:
+    effectnames = f"{effectnames}\n{effectname}"
+  effectnames = f"{effectnames}```"
+  await client.send_message(message.channel, effectnames )
 
 async def cReload(message,params={}):
+  '''Reloads the bot ( kills, restart the script yourself )'''
   if message.author != me:
     await client.send_message(message.channel, "You can't tell me what to do!" )
     return
@@ -330,7 +373,8 @@ async def cReload(message,params={}):
   session.close()
   exit()
 
-async def cShutdown(message,params={}):
+async def cShutdown(message,params={}):  
+  '''Turns off the bot hardware.'''
   if message.author != me:
     await client.send_message(message.channel, "I hope you never wake up." )
     return
@@ -343,11 +387,11 @@ async def cShutdown(message,params={}):
   subprocess.call(command.split())
   
 async def cTemp(message,params={}):
-  xtemp = await getTemp()
-  await client.send_message(message.channel, f"Current Temperature: {round(xtemp,2)}°C" )
+  '''Returns current temperature values (DEPRECATED: USE STATUS)'''
+  await cStatus(message,params=params) #lmao
   
 async def cStatus(message,params={}):
-  xtemp = await getTemp()
+  '''Returns misc bot information'''
   xiface = None
   async with session.get("http://icanhazip.com/") as IP:
     tIP = str(await IP.text())[:-1]
@@ -361,16 +405,14 @@ async def cStatus(message,params={}):
   while pping.poll() is None or pcputemp.poll() is None:
     await asyncio.sleep(0.05)
   xping = re.search('time=(.*?) ms', str(pping.stdout.read()) ).group(1)
-  xgputemp = re.search("temp=(.*?)'C", str(pcputemp.stdout.read()) ).group(1)
-  fcputemp = await aiofiles.open('/sys/class/thermal/thermal_zone0/temp','r')
-  xcputemp = float(await fcputemp.read())/1000
   if xiface == 'ppp0':
     xiface = "3g"
   elif xiface == 'eth0':
     xiface = "Ethernet"
-  elif xiface == 'wlan0':
+  else: #may as well at this point assume it's WiFi or we woudln't be online at all. 
     xiface = "WiFi"
   
+  xtemp,xcputemp,xgputemp = await getTemp()
   embed=discord.Embed(title="Status", description=f"Requested by {message.author.mention}", color=discord.Color.green())
   embed.add_field(name='Ambient Temperature', value=f'{round(xtemp,1)}°C', inline=True)
   embed.add_field(name='GPU Temperature', value=f'{xgputemp}°C', inline=True)
@@ -380,7 +422,30 @@ async def cStatus(message,params={}):
   embed.add_field(name='Local Time', value=datetime.now().strftime('%H:%M:%S UTC+1'), inline=True)
   await client.send_message(message.channel, embed=embed)
   
-
+async def cHelp(message,params={}):
+  '''Get help for the bot'''
+  hCommands = []
+  # for command in commands:
+    # for cmdName in command[0]:
+      # if params.get(cmdName):
+        # hCommands.append(command)
+        # break
+  embed = discord.Embed() 
+  embed.title = f'Help for TimelapseBot'
+  embed.type = 'rich'
+  embed.description = 'To use a command mention me with the command name and any parameters. Named parameters are called by name=value' 
+  embed.colour = discord.Color.gold()
+  embed.set_footer(text=datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC+1 '))
+  for command in hCommands or commands:
+    embed.add_field(name='/'.join(command[0]),value=command[1].__doc__,inline=False)
+  
+  await client.send_message(message.channel,embed=embed)
+ 
+    
+async def cPrefix(message,params={}):
+  '''mate there is no prefix'''
+  client.send_message(message.channel, 'No prefix, simply mention me anywhere in your command.')
+  
 for k,dir in dirs.items():
   if not os.path.exists(dir):
     print(f'Did not find {dir}. Creating...')
@@ -397,12 +462,12 @@ if len(framefiles) > 0:
         print(f'FRAME DIRECTORY ({dirs["frames"]}) IS NOT EMPTY. REMOVE FILE {ffile}.')
         exit()
     
-    
-# camera = mmalobj.MMALCamera()
-# encoder = mmalobj.MMALVideoEncoder()
-# encoder.format = 'h264'
-
-camera = PiCamera()
+if not lowpower: 
+  camera = mmalobj.MMALCamera()
+  encoder = mmalobj.MMALVideoEncoder()
+  encoder.format = 'h264'
+else:
+  camera = PiCamera()
 camera.close()
 
 me = discord.Object('103294721119494144')  
@@ -417,7 +482,9 @@ commands = [
   [['reload','restart'],cReload,False],
   [['goodnight','shutdown'],cShutdown,False],
   [['temp','temperature'],cTemp,False],
-  [['status','info'],cStatus,False]
+  [['status','info'],cStatus,False],
+  [['help','commands'],cHelp,False],
+  [['prefix'],cPrefix,False]
 ]
 
 client.loop.create_task(iPic())
@@ -464,34 +531,35 @@ async def on_message(message):
       await client.add_reaction(message, '\U00002705')
       await client.send_message(message.channel, "Sorry, no private commands at the moment." )
     return
+  cmd = None
   params = {}
   if message.server.me in message.mentions and message.author != message.server.me:
-    for pmessage in message.content.split():
-      for command in commands:
-        if pmessage in command[0]:
-          if command[2]:
-            if message.author.id in userswaiting:
-              return
-            else:
-              userswaiting.append(message.author.id)
-          
-          cmd = command
-          if not message.channel.is_private:
-            await olog(f'{message.author.mention}\\_{pmessage}\\_{message.server.name}\\_{message.server.id}\\_{message.channel.mention}')
-          break
-      param = re.search('([a-zA-Z0-9]+)=([a-zA-Z0-9]+)',pmessage)
-      if param:
-        params[param.group(1).lower()] = param.group(2) or True
-      else:
-        params[pmessage.lower()] = True
-           
-    if cmd:
+    try:
+      for pmessage in message.content.split():
+        for command in commands:
+          if pmessage.lower() in command[0]:
+            if command[2]:
+              if message.author.id in userswaiting:
+                return
+              else:
+                userswaiting.append(message.author.id)
+            
+            cmd = command
+            if not message.channel.is_private:
+              await olog(f'{message.author.mention}\\_{pmessage}\\_{message.server.name}\\_{message.server.id}\\_{message.channel.mention}')
+            raise CommandFound
+    except CommandFound:
+      for pmessage in message.content.split():
+        param = re.search('([a-zA-Z0-9]+)=([a-zA-Z0-9]+)',pmessage)
+        if param:
+          params[param.group(1).lower()] = param.group(2) or True
+        else:
+          params[pmessage.lower()] = True
+             
       await cmd[1](message=message,params=params)
-    else:
-      return
-    if cmd[2]:
-      userswaiting.remove(message.author.id)
-  
+      if cmd[2]:
+        userswaiting.remove(message.author.id)
+    
          
 
 client.run(token)
