@@ -101,7 +101,7 @@ async def iPic():
   # await asyncio.sleep(0)
 
 async def olog(message):
-  await client.send_message(me, message)
+  await me.send(message)
 
 def valideffect(effect):
   if str(effect).lower() in PiCamera.IMAGE_EFFECTS:
@@ -111,69 +111,90 @@ def valideffect(effect):
 
 async def cPic(message,params={}):
   '''Takes a live picture from the bot.
-Parameters: effectname, eff=effectname
-Get valid effects from the effects command'''
+Parameters: effectname, eff=effectname shutter=seconds night'''
   if params.get('help'):
-    await client.send_message(message.channel, f'{message.author.mention} `!pic effect eff=effect`')
+    await message.channel.send( f'{message.author.mention} `!pic effect eff=effect`')
     return
   xtemp,_,_ = await getTemp()
   if not lowpower:
-    await client.send_typing(message.channel)
-    timestamp = f'Picture taken at:{datetime.fromtimestamp(path.getctime(lastframe)).strftime("%Y-%m-%d %H:%M:%S")} UTC+1 \n **Temperature:** {round(xtemp,2)}°C '
-    filepath = lastframe 
+    async with message.channel.typing():
+      timestamp = f'Picture taken at:{datetime.fromtimestamp(path.getctime(lastframe)).strftime("%Y-%m-%d %H:%M:%S")} UTC+1 \n **Temperature:** {round(xtemp,2)}°C '
+      filepath = lastframe 
   else:
     global camera
     while not camera.closed:
       await asyncio.sleep(0.1)
-    
-    camera = PiCamera()
-    camera.start_preview()            
-    await client.send_typing(message.channel)
-    
-    timestamp = zalgo(f'Picture taken at: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")} UTC+1 \n**Temperature:** {round(xtemp,2)}°C ',1)
-    timestampshort = datetime.now().strftime('%Y%m%d_%H%M%S')
-    shortname = re.sub('[^0-9a-zA-Z]','',message.author.name)
-    filepath = path.join(dirs['live'],f'{timestampshort}_{shortname}_{message.author.id}.jpg')
-    
-    fPic = functools.partial(camera.capture,filepath,'jpeg',)
-    
-    effect = None
-    if params.get('eff'):
-      effect = valideffect(params.get('eff'))
+    print(params.get('night'))
+    if params.get('night'):
+      camera = PiCamera(
+      resolution=(3280, 2464),
+      framerate=1/6,
+      sensor_mode=3)
+      
+      camera.shutter_speed = 6000000
+      camera.iso = 800
+      camera.exposure_mode = 'night'
+    elif params.get('simple'):
+      camera = PiCamera(resolution=(3280, 2464),
+      sensor_mode=2)
     else:
-      for param in params.keys():
-        if valideffect(param):
-          effect = valideffect(param)
-    
-    while True:
       try:
-        camera.image_effect = effect or 'none'
-        camera.resolution = (3280, 2464)
-        await client.loop.run_in_executor(None, fPic)
-        camera.close()
-        break
-      except Exception as e:
-        print(e)
-        await asyncio.sleep(1)
-
-    try:
-      await client.send_file(message.channel, filepath , content=timestamp)
-    except discord.errors.HTTPException as e:
-      await client.send_message(message.channel, f'{message.author.mention} Upload failed with Error: `{str(e)}`')
-    except:
-      print(exc_info)
-      raise
+        shutter_speed = max(1/10,min(float(params.get('shutter')),8))
+      except TypeError as e:
+        shutter_speed = 1/10
+      print(shutter_speed)
+      camera = PiCamera(
+      resolution=(3280, 2464),
+      framerate=1/shutter_speed,
+      sensor_mode=2)
+      if params.get('shutter'):
+        camera.shutter_speed = int(shutter_speed * 1000000)
+      else:
+        camera.shutter_speed = 0
+      camera.exposure_mode = 'auto'
+    async with message.channel.typing():
+      
+      camera.start_preview()
+      if params.get('fast'):
+        await asyncio.sleep(1)   
+      elif not params.get('vfast'):
+        await asyncio.sleep(2)  
+      timestamp = zalgo(f'Picture taken at: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")} UTC+1 \n**Temperature:** {round(xtemp,2)}°C ',1)
+      timestampshort = datetime.now().strftime('%Y%m%d_%H%M%S')
+      shortname = re.sub('[^0-9a-zA-Z]','',message.author.name)
+      filepath = path.join(dirs['live'],f'{timestampshort}_{shortname}_{message.author.id}.jpg')
+      
+      fPic = functools.partial(camera.capture,filepath,'jpeg',use_video_port=params.get('video') or False)
+      
+      effect = None
+      if params.get('eff'):
+        effect = valideffect(params.get('eff'))
+      else:
+        for param in params.keys():
+          if valideffect(param):
+            effect = valideffect(param)
+      
+      
+      
+      
+      camera.image_effect = effect or 'none'
+      await client.loop.run_in_executor(None, fPic)
+      camera.close()
+      try:
+        await message.channel.send( file=discord.File(filepath) , content=timestamp)
+      except discord.errors.HTTPException as e:
+        await message.channel.send( f'{message.author.mention} Upload failed with Error: `{str(e)}`')
+      except:
+        print(exc_info)
+        raise
 
 async def cGif(message,params={}):
   '''Takes a live gif from the bot.
-Parameters: effectname, eff=effectname, s=ength_seconds, fps=fps
-Get valid effects from the effects command'''
+Parameters: effectname, eff=effectname, s=length_seconds, fps=fps'''
   if not lowpower:
-    await client.send_message(message.channel, f'Gifs are not available in timelapse mode.')
+    await message.channel.send( f'Gifs are not available in timelapse mode.')
     return
-  if params.get('help'):
-    await client.send_message(message.channel, f'{message.author.mention} `!gif/gfy/gfycat fps=1-30 s=1-59 eff=effects`')
-    return
+
   
   
   timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC+1 ')
@@ -188,17 +209,20 @@ Get valid effects from the effects command'''
   embed.colour = discord.Color.red()
   embed.set_footer(text=timestamp)
   field1 = embed.add_field(name='Status',value='Preparing',inline=True)
-  embedm = await client.send_message(message.channel,embed=embed)
+  embedm = await message.channel.send(embed=embed)
  
   global camera
-  while not camera.closed:
-    await asyncio.sleep(0.1)
+  if not camera.closed:
+    field1 = embed.set_field_at(index=0,name='Status',value='Waiting for Camera',inline=True)
+    await embedm.edit(embed=embed)
+    while not camera.closed:
+      await asyncio.sleep(0.1)
     
   camera = PiCamera()  
   camera.start_preview()   
   
   try:
-    delay = max(1,min(int(params.get('s')),59,))
+    delay = max(1,min(float(params.get('s')),59,))
   except TypeError:
     delay = 3
   try:
@@ -219,7 +243,7 @@ Get valid effects from the effects command'''
 
 
   field1 = embed.set_field_at(index=0,name='Status',value='Waiting for Camera',inline=True)
-  await client.edit_message(embedm,embed=embed)
+  await embedm.edit(embed=embed)
   while True:
     try:
       camera.image_effect = effect or 'none'
@@ -232,7 +256,7 @@ Get valid effects from the effects command'''
       print(e)
   field1 = embed.set_field_at(index=0,name='Status',value='Recording',inline=True)
   embed.colour = discord.Color(0xFFFF00)
-  await client.edit_message(embedm,embed=embed)
+  await embedm.edit(embed=embed)
   waituntil = time() + delay
   while waituntil >= time():
     try:
@@ -251,7 +275,7 @@ Get valid effects from the effects command'''
     print('FAIL:\ncmd:{}\noutput:{}'.format(e.cmd, e.output))
     field1 = embed.set_field_at(index=0,name='Status',value='FAILED',inline=True)
     embed.colour = discord.Color(0xFF0000)
-    await client.edit_message(embedm,embed=embed)
+    await embedm.edit(embed=embed)
     return
     
 
@@ -263,7 +287,7 @@ Get valid effects from the effects command'''
   
   field1 = embed.set_field_at(index=0,name='Status',value='Uploading',inline=True)
   embed.colour = discord.Color.green()
-  await client.edit_message(embedm,embed=embed)
+  await embedm.edit(embed=embed)
   async with session.post('https://api.gfycat.com/v1/oauth/token', data=str(data)) as rt:
     rtjson = await rt.json()
     token = f"Bearer {rtjson['access_token']}"
@@ -281,31 +305,40 @@ Get valid effects from the effects command'''
         gfyname = rjson['gfyname']
         async with aiofiles.open(filepathmp4,mode='rb',loop=client.loop) as f:
           fgfy = await f.read()
-          
-          with aiohttp.MultipartWriter('form-data') as mpwriter:
+          data = aiohttp.FormData()
+          data.add_field('file',
+                         fgfy,
+                         filename=rjson['gfyname'],
+                         content_type='video/mp4')
+
+          # await session.post(url, data=data)
+                    # with aiohttp.MultipartWriter('form-data') as mpwriter:
             
-            
-            part = mpwriter.append((rjson['gfyname']))
-            part.set_content_disposition('form-data', name='key')
-            part2 = mpwriter.append(fgfy,{'CONTENT-TYPE': 'video/mp4'})  
-            part2.set_content_disposition('form-data', name='file', filename=rjson['gfyname'])
-            body = b''.join(mpwriter.serialize())
+            # print(mpwriter.append((rjson['gfyname'])))
+            # part = mpwriter.append((rjson['gfyname']))
+            # part.set_content_disposition('form-data', name='key')
+            # part2 = mpwriter.append(fgfy,{'CONTENT-TYPE': 'video/mp4'})  
+            # part2.set_content_disposition('form-data', name='file', filename=rjson['gfyname'])
+            # body = b''.join(mpwriter.serialize())
             
             # print(len(body))
             # mpwriter.headers[aiohttp.hdrs.CONTENT_LENGTH] = str(len(body))
-            async with session.request('post','https://filedrop.gfycat.com', data=body, headers = mpwriter.headers) as r2:
-              pass
+            # async with session.request('post','https://filedrop.gfycat.com', data=body, headers = mpwriter.headers) as r2:
+          async with session.request('post','https://filedrop.gfycat.com', data=data) as r2:
+            print(r2)
+            pass
       else:
         print(rjson)
   except:
     embed.set_field_at(index=0,name='Status',value='FAILED',inline=True)
     embed.add_field(name='Error',value='Failed during upload',inline=True)
     embed.colour = discord.Color(0xFF0000)
-    await client.edit_message(embedm,embed=embed)
+    await embedm.edit(embed=embed)
+    raise
     return
     
   field1 = embed.set_field_at(index=0,name='Status',value='Waiting for gfycat',inline=True)
-  await client.edit_message(embedm,embed=embed)
+  await embedm.edit(embed=embed)
   first = True
   oldprogress = ''
   progress = '0'
@@ -323,7 +356,7 @@ Get valid effects from the effects command'''
         except:
           embed.add_field(name='Error',value=f'`{r3json["errorMessage"]["code"]} : {r3json["errorMessage"]["description"]}`',inline=True)
         embed.colour = discord.Color.red()
-        await client.edit_message(embedm,embed=embed)
+        await embedm.edit(embed=embed)
         
         return
       elif 'task' in r3json:
@@ -339,7 +372,7 @@ Get valid effects from the effects command'''
           
           if oldprogress != progress:
             oldprogress = progress
-            await client.edit_message(embedm,embed=embed)
+            await embedm.edit(embed=embed)
           await asyncio.sleep(1)
       else:
           await asyncio.sleep(1)
@@ -349,9 +382,9 @@ Get valid effects from the effects command'''
   await gfylog.write(f'\n{gfylink}')
   await gfylog.close()
    
-  await client.delete_message(embedm)
+  await embedm.delete()
   xtemp,_,_ = await getTemp()
-  await client.send_message(message.channel, f'Gfy taken at: {timestamp} \n**Temperature:** {round(xtemp,2)}°C \n{gfylink}')
+  await message.channel.send( f'Gfy taken at: {timestamp} \n**Temperature:** {round(xtemp,2)}°C \n{gfylink}')
      
 async def cEffects(message,params={}):
   '''Lists all available image/video effects'''
@@ -359,37 +392,33 @@ async def cEffects(message,params={}):
   for effectname in PiCamera.IMAGE_EFFECTS:
     effectnames = f"{effectnames}\n{effectname}"
   effectnames = f"{effectnames}```"
-  await client.send_message(message.channel, effectnames )
+  await message.channel.send( effectnames )
 
 async def cReload(message,params={}):
-  '''Reloads the bot ( kills, restart the script yourself )'''
+  '''Reloads the bot. `OWNER ONLY`'''
   if message.author != me:
-    await client.send_message(message.channel, "You can't tell me what to do!" )
+    await message.channel.send( f"I'm sorry {message.author.mention}, I'm afraid I can't do that." )
     return
-  await client.send_message(message.channel, "Will do." )
+  await message.add_reaction('\U0000267b')
   async with aiofiles.open(path.join(dirs['logs'],'reload'),('w+')) as reloadfile:
-    await reloadfile.write(message.channel.id)
+    await reloadfile.write(str(message.channel.id))
   await client.logout()
   session.close()
   exit()
 
 async def cShutdown(message,params={}):  
-  '''Turns off the bot hardware.'''
+  '''Turns off the bot hardware. `OWNER ONLY`'''
   if message.author != me:
-    await client.send_message(message.channel, "I hope you never wake up." )
+    await message.channel.send( "I hope you never wake up." )
     return
-  await client.send_message(message.channel, "Sleep tight." )
+  await message.add_reaction('\U0000267b')
   async with aiofiles.open(path.join(dirs['logs'],'reload'),('w+')) as reloadfile:
-    await reloadfile.write(message.channel.id)
+    await reloadfile.write(str(message.channel.id))
   await client.logout()
   session.close()
   command = "/usr/bin/sudo /sbin/shutdown now"
   subprocess.call(command.split())
-  
-async def cTemp(message,params={}):
-  '''Returns current temperature values (DEPRECATED: USE STATUS)'''
-  await cStatus(message,params=params) #lmao
-  
+    
 async def cStatus(message,params={}):
   '''Returns misc bot information'''
   xiface = None
@@ -420,38 +449,47 @@ async def cStatus(message,params={}):
   embed.add_field(name='Network Device', value=f'{xiface}', inline=True)
   embed.add_field(name='Ping', value=f'{xping}ms', inline=True)
   embed.add_field(name='Local Time', value=datetime.now().strftime('%H:%M:%S UTC+1'), inline=True)
-  await client.send_message(message.channel, embed=embed)
+  await message.channel.send( embed=embed)
   
 async def cHelp(message,params={}):
   '''Get help for the bot'''
   hCommands = []
-  # for command in commands:
-    # for cmdName in command[0]:
-      # if params.get(cmdName):
-        # hCommands.append(command)
-        # break
+  for command in commands:
+    for cmdName in command[0]:
+      if params.get(cmdName):
+        hCommands.append(command)
+        break
   embed = discord.Embed() 
   embed.title = f'Help for TimelapseBot'
   embed.type = 'rich'
   embed.description = 'To use a command mention me with the command name and any parameters. Named parameters are called by name=value' 
   embed.colour = discord.Color.gold()
-  embed.set_footer(text=datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC+1 '))
   for command in hCommands or commands:
     embed.add_field(name='/'.join(command[0]),value=command[1].__doc__,inline=False)
   
-  await client.send_message(message.channel,embed=embed)
- 
+  await message.channel.send(embed=embed)
     
 async def cPrefix(message,params={}):
   '''mate there is no prefix'''
-  client.send_message(message.channel, 'No prefix, simply mention me anywhere in your command.')
-  
+  message.channel.send( 'No prefix, simply mention me anywhere in your command.')
+
+async def cDebug(message,params={}):
+  '''Prints the console output'''
+  async with aiofiles.open(path.join(dirs['logs'],'stdout.log'),"r") as logfile:
+    logs = await logfile.readlines()
+    try:
+      lines = max(1,min(20,int(params.get('lines') or params.get('l') or params.get('i')))),
+    except TypeError as e:
+      lines = 10
+    await message.channel.send( f"```{''.join(logs[-lines:])}```" )
+      
+      
 for k,dir in dirs.items():
   if not os.path.exists(dir):
     print(f'Did not find {dir}. Creating...')
     os.mkdir(dir)
 
-    
+  
 framefiles = listdir(dirs['frames'])
 if len(framefiles) > 0:
   print(f'Frames directory not empty, deleting {len(framefiles)} files...')
@@ -470,7 +508,6 @@ else:
   camera = PiCamera()
 camera.close()
 
-me = discord.Object('103294721119494144')  
 client = discord.Client()
 session = aiohttp.ClientSession(loop=client.loop)
 
@@ -479,12 +516,12 @@ commands = [
   [['effects'],cEffects,False],
   [['gif','gfy','gfycat'],cGif,True],
   [['pic','picture'],cPic,True],
-  [['reload','restart'],cReload,False],
+  [['reload','relaod','restart'],cReload,False],
   [['goodnight','shutdown'],cShutdown,False],
-  [['temp','temperature'],cTemp,False],
   [['status','info'],cStatus,False],
   [['help','commands'],cHelp,False],
-  [['prefix'],cPrefix,False]
+  [['prefix'],cPrefix,False],
+  [['debug','error'],cDebug,False]
 ]
 
 client.loop.create_task(iPic())
@@ -492,31 +529,34 @@ client.loop.create_task(iPic())
 @client.event
 async def on_ready():
   global me
+  me = client.get_user(103294721119494144)
   print('Logged in as:')
   print(client.user.name)
   print(client.user.id)
   print('Connected to:')
-  unesco = discord.Object('287618635831443456')
-  for server in client.servers:
-    if server.id == unesco.id:     
-      unesco = server
-      me = server.owner
-    print(server.id)
-    print(server.name)
-    print(server.owner.name)
+  for guild in client.guilds:
+    print(guild.id)
+    print(guild.name)
+    print(guild.owner.name)
     
   for privatechannel in client.private_channels:
-    async for message in client.logs_from(privatechannel, limit=100):
+    async for message in privatechannel.history(limit=100):
       if discord.utils.get(message.reactions, me=True) is None and message.author != client.user:
         await olog(message.author.mention+" "+message.content)   
         await client.add_reaction(message, '\U00002705')
-
-  if path.isfile(path.join(dirs['logs'],'reload')):
-    async with aiofiles.open(path.join(dirs['logs'],'reload'),('r')) as reloadfile:
-      await client.send_message(discord.Object(await reloadfile.read()),"I'm back.")
-    os.remove(path.join(dirs['logs'],'reload'))
-      
-  
+  try:
+    if path.isfile(path.join(dirs['logs'],'reload')):
+      async with aiofiles.open(path.join(dirs['logs'],'reload'),('r')) as reloadfile:
+        async for message in client.get_channel(int(await reloadfile.read())).history(limit=20):
+          if discord.utils.get(message.reactions,emoji='\U0000267b', me=True):
+            await message.remove_reaction('\U0000267b',client.user)
+            await message.add_reaction('\U00002705')
+            break
+      os.remove(path.join(dirs['logs'],'reload'))
+  except Exception as e:
+    print(e)
+    pass
+    
   async with session.get("http://icanhazip.com/") as IP:
     IPtext = await IP.text()
     await olog(f"I'm running :) {IPtext}")    
@@ -525,17 +565,18 @@ async def on_ready():
   
 @client.event 
 async def on_message(message):
-  if message.channel.is_private:
+  if isinstance(message.channel,discord.abc.PrivateChannel):
     if message.author != message.channel.me:
       await olog(f'{message.author.mention}:{message.content}')
       await client.add_reaction(message, '\U00002705')
-      await client.send_message(message.channel, "Sorry, no private commands at the moment." )
+      await message.channel.send( "Sorry, no private commands at the moment." )
     return
   cmd = None
   params = {}
-  if message.server.me in message.mentions and message.author != message.server.me:
+  if message.guild.me in message.mentions and message.author != message.guild.me:
+    smessage = message.content.split()
     try:
-      for pmessage in message.content.split():
+      for pmessage in smessage:
         for command in commands:
           if pmessage.lower() in command[0]:
             if command[2]:
@@ -545,12 +586,13 @@ async def on_message(message):
                 userswaiting.append(message.author.id)
             
             cmd = command
-            if not message.channel.is_private:
-              await olog(f'{message.author.mention}\\_{pmessage}\\_{message.server.name}\\_{message.server.id}\\_{message.channel.mention}')
+            smessage.remove(pmessage)
+            if not isinstance(message.channel,discord.abc.PrivateChannel):
+              await olog(f'{message.author.mention}\\_{pmessage}\\_{message.guild.name}\\_{message.guild.id}\\_{message.channel.mention}')
             raise CommandFound
     except CommandFound:
-      for pmessage in message.content.split():
-        param = re.search('([a-zA-Z0-9]+)=([a-zA-Z0-9]+)',pmessage)
+      for pmessage in smessage:
+        param = re.search('([a-zA-Z0-9]+)=([a-zA-Z0-9\.]+)',pmessage)
         if param:
           params[param.group(1).lower()] = param.group(2) or True
         else:
@@ -559,7 +601,8 @@ async def on_message(message):
       await cmd[1](message=message,params=params)
       if cmd[2]:
         userswaiting.remove(message.author.id)
-    
-         
-
+      
+      
+      
+      
 client.run(token)

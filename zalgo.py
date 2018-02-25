@@ -58,4 +58,4 @@ if __name__ == "__main__":
   while len(text) < 5:
     text = input("Too short bro: ")
   tfile = open("output.txt", "bw+")
-  tfile.write(zalgo(text).encode("utf-8"))
+  tfile.write(zalgo(text,mode=1).encode("utf-8"))
