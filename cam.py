@@ -284,7 +284,7 @@ Parameters: effectname, eff=effectname, s=length_seconds, fps=fps'''
     await embedm.edit(embed=embed)
     return
     
-  doembed = os.path.getsize(filepathmp4) < 8e+6 or params.get('embed') or params.get('nogfy')
+  doembed = not params.get('noembed') and os.path.getsize(filepathmp4) < 8e+6 or params.get('embed') or params.get('nogfy')
     
     
   if not doembed:
@@ -348,7 +348,6 @@ Parameters: effectname, eff=effectname, s=length_seconds, fps=fps'''
   else:
     await message.channel.send( f'Gfy taken for {message.author.mention} at: {timestamp} \n**Temperature:** {round(xtemp,2)}°C \n{gfylink}')
    
-  
    
 async def cEffects(message,params={}):
   '''Lists all available image/video effects'''

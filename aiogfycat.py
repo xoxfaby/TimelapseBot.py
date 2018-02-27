@@ -6,14 +6,14 @@ from time import monotonic
 
 class GfycatClient:
   def __init__(self,id,secret,loop=None,session=None):
-      self._id = id
-      self._secret = secret
-      self._expiration = 0
-      self._loop = loop
-      self._session = session or aiohttp.ClientSession(loop=loop)
-      self._token = ""
-      
-  
+    self._id = id
+    self._secret = secret
+    self._expiration = 0
+    self._loop = loop
+    self._session = session or aiohttp.ClientSession(loop=loop)
+    self._token = ""
+
+
   
   async def _auth(self):
     data = {  
@@ -25,8 +25,7 @@ class GfycatClient:
     async with self._session.post('https://api.gfycat.com/v1/oauth/token', data=str(data)) as rt:
       rtjson = await rt.json()
       self._token = f"Bearer {rtjson['access_token']}"
-      self._expiration = monotonic() + int(rtjson['expires_in']) + 9999999
-    return
+      self._expiration = monotonic() + int(rtjson['expires_in'])
     
   async def _auth_reqeust(self,*args, **kwargs):
     if monotonic() > self._expiration:
@@ -36,13 +35,15 @@ class GfycatClient:
       kwargs['headers']["Authorization"] = self._token
     else:
       kwargs['headers'] = {"Authorization": self._token}
-    async with self._session.request(*args, **kwargs) as r:
-      if r.status == 401:
-        await self._auth()
-        kwargs['headers']["Authorization"] = self._token
-        async with self._session.request(*args, **kwargs) as r2:
-          return await r2.json()
-      return await r.json()
+    for _ in range(5):
+      async with self._session.request(*args, **kwargs) as r:
+        if 500 <= r.status <= 599: 
+          await asyncio.sleep(1)
+        if r.status == 401:
+          await self._auth()
+          kwargs['headers']["Authorization"] = self._token
+        else:
+          return await r.json()
 
   
     
