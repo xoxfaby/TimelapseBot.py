@@ -14,7 +14,7 @@ from sys import exc_info
 from os import path
 from os import listdir
 from time import sleep
-from time import time
+from time import monotonic as time
 from picamera import PiCamera
 from datetime import datetime
 from random import random
@@ -25,8 +25,8 @@ from config import token
 from config import gfyid
 from config import gfysecret
 from config import tempid
+import aiogfycat
 
-from zalgo import zalgo
 
 class CommandFound(Exception): pass
 
@@ -101,7 +101,9 @@ async def iPic():
   # await asyncio.sleep(0)
 
 async def olog(message):
-  await me.send(message)
+  while not client.is_ready():
+    asyncio.wait(0.1)
+  await client.get_user(103294721119494144).send(message)
 
 def valideffect(effect):
   if str(effect).lower() in PiCamera.IMAGE_EFFECTS:
@@ -112,6 +114,7 @@ def valideffect(effect):
 async def cPic(message,params={}):
   '''Takes a live picture from the bot.
 Parameters: effectname, eff=effectname shutter=seconds night'''
+  waittime = time()
   if params.get('help'):
     await message.channel.send( f'{message.author.mention} `!pic effect eff=effect`')
     return
@@ -124,16 +127,15 @@ Parameters: effectname, eff=effectname shutter=seconds night'''
     global camera
     while not camera.closed:
       await asyncio.sleep(0.1)
-    print(params.get('night'))
     if params.get('night'):
       camera = PiCamera(
       resolution=(3280, 2464),
       framerate=1/6,
       sensor_mode=3)
       
+      camera.exposure_mode = 'sports'
       camera.shutter_speed = 6000000
-      camera.iso = 800
-      camera.exposure_mode = 'night'
+      camera.iso = 0
     elif params.get('simple'):
       camera = PiCamera(resolution=(3280, 2464),
       sensor_mode=2)
@@ -142,29 +144,34 @@ Parameters: effectname, eff=effectname shutter=seconds night'''
         shutter_speed = max(1/10,min(float(params.get('shutter')),8))
       except TypeError as e:
         shutter_speed = 1/10
-      print(shutter_speed)
       camera = PiCamera(
       resolution=(3280, 2464),
       framerate=1/shutter_speed,
       sensor_mode=2)
+      try:
+        camera.iso = int(params.get('iso'))
+      except TypeError:
+        pass
       if params.get('shutter'):
         camera.shutter_speed = int(shutter_speed * 1000000)
       else:
         camera.shutter_speed = 0
-      camera.exposure_mode = 'auto'
+      # camera.exposure_mode = 'auto'
     async with message.channel.typing():
       
       camera.start_preview()
       if params.get('fast'):
         await asyncio.sleep(1)   
       elif not params.get('vfast'):
-        await asyncio.sleep(2)  
-      timestamp = zalgo(f'Picture taken at: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")} UTC+1 \n**Temperature:** {round(xtemp,2)}°C ',1)
+        await asyncio.sleep(2)
+        
+        
+      timestamp = f'Picture taken for {message.author.mention}at: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")} UTC+1 \n**Temperature:** {round(xtemp,2)}°C '
       timestampshort = datetime.now().strftime('%Y%m%d_%H%M%S')
       shortname = re.sub('[^0-9a-zA-Z]','',message.author.name)
       filepath = path.join(dirs['live'],f'{timestampshort}_{shortname}_{message.author.id}.jpg')
       
-      fPic = functools.partial(camera.capture,filepath,'jpeg',use_video_port=params.get('video') or False)
+
       
       effect = None
       if params.get('eff'):
@@ -178,8 +185,11 @@ Parameters: effectname, eff=effectname shutter=seconds night'''
       
       
       camera.image_effect = effect or 'none'
+      camera.exposure_mode = 'off'
+      fPic = functools.partial(camera.capture,filepath,'jpeg')
       await client.loop.run_in_executor(None, fPic)
       camera.close()
+      print(time()-waittime)
       try:
         await message.channel.send( file=discord.File(filepath) , content=timestamp)
       except discord.errors.HTTPException as e:
@@ -244,16 +254,12 @@ Parameters: effectname, eff=effectname, s=length_seconds, fps=fps'''
 
   field1 = embed.set_field_at(index=0,name='Status',value='Waiting for Camera',inline=True)
   await embedm.edit(embed=embed)
-  while True:
-    try:
-      camera.image_effect = effect or 'none'
-      camera.resolution = (1640,1232)
-      camera.framerate = fps
-      await client.loop.run_in_executor(None, fGif)
-      break
-    except Exception as e:
-      await asyncio.sleep(1)
-      print(e)
+  
+  camera.image_effect = effect or 'none'
+  camera.resolution = (1640,1232)
+  camera.framerate = fps
+  await client.loop.run_in_executor(None, fGif)
+
   field1 = embed.set_field_at(index=0,name='Status',value='Recording',inline=True)
   embed.colour = discord.Color(0xFFFF00)
   await embedm.edit(embed=embed)
@@ -278,114 +284,72 @@ Parameters: effectname, eff=effectname, s=length_seconds, fps=fps'''
     await embedm.edit(embed=embed)
     return
     
-
-  data = {  
-      "client_id": gfyid,
-      "client_secret": gfysecret,
-      "grant_type": "client_credentials"
-  }
-  
-  field1 = embed.set_field_at(index=0,name='Status',value='Uploading',inline=True)
-  embed.colour = discord.Color.green()
-  await embedm.edit(embed=embed)
-  async with session.post('https://api.gfycat.com/v1/oauth/token', data=str(data)) as rt:
-    rtjson = await rt.json()
-    token = f"Bearer {rtjson['access_token']}"
+  doembed = os.path.getsize(filepathmp4) < 8e+6 or params.get('embed') or params.get('nogfy')
     
-  headers = {'Content-Type': 'application/json',"Authorization": token}
-  headers2 = {"Authorization": token }
     
-  gfyname = ""
-  
-  
-  try:
-    async with session.post('https://api.gfycat.com/v1/gfycats', headers=headers) as r:
-      rjson = await r.json()
-      if rjson['isOk']:  
-        gfyname = rjson['gfyname']
-        async with aiofiles.open(filepathmp4,mode='rb',loop=client.loop) as f:
-          fgfy = await f.read()
-          data = aiohttp.FormData()
-          data.add_field('file',
-                         fgfy,
-                         filename=rjson['gfyname'],
-                         content_type='video/mp4')
-
-          # await session.post(url, data=data)
-                    # with aiohttp.MultipartWriter('form-data') as mpwriter:
-            
-            # print(mpwriter.append((rjson['gfyname'])))
-            # part = mpwriter.append((rjson['gfyname']))
-            # part.set_content_disposition('form-data', name='key')
-            # part2 = mpwriter.append(fgfy,{'CONTENT-TYPE': 'video/mp4'})  
-            # part2.set_content_disposition('form-data', name='file', filename=rjson['gfyname'])
-            # body = b''.join(mpwriter.serialize())
-            
-            # print(len(body))
-            # mpwriter.headers[aiohttp.hdrs.CONTENT_LENGTH] = str(len(body))
-            # async with session.request('post','https://filedrop.gfycat.com', data=body, headers = mpwriter.headers) as r2:
-          async with session.request('post','https://filedrop.gfycat.com', data=data) as r2:
-            print(r2)
-            pass
-      else:
-        print(rjson)
-  except:
-    embed.set_field_at(index=0,name='Status',value='FAILED',inline=True)
-    embed.add_field(name='Error',value='Failed during upload',inline=True)
-    embed.colour = discord.Color(0xFF0000)
+  if not doembed:
+    field1 = embed.set_field_at(index=0,name='Status',value='Uploading',inline=True)
+    embed.colour = discord.Color.green()
     await embedm.edit(embed=embed)
-    raise
-    return
-    
-  field1 = embed.set_field_at(index=0,name='Status',value='Waiting for gfycat',inline=True)
-  await embedm.edit(embed=embed)
-  first = True
-  oldprogress = ''
-  progress = '0'
-  while True:
-    async with session.request('get',f'https://api.gfycat.com/v1/gfycats/fetch/status/{gfyname}', headers=headers2) as r3: 
-    
-      r3json = await r3.json()
-      if 'gfyname' in r3json:
-        gfyname = r3json['gfyname']
+
+    gfyname = await GfycatClient.upload(filepathmp4)
+    print(gfyname)
+      
+    # embed.set_field_at(index=0,name='Status',value='FAILED',inline=True)
+    # embed.add_field(name='Error',value='Failed during upload',inline=True)
+    # embed.colour = discord.Color(0xFF0000)
+    # await embedm.edit(embed=embed)
+      
+    field1 = embed.set_field_at(index=0,name='Status',value='Waiting for gfycat',inline=True)
+    await embedm.edit(embed=embed)
+    first = True
+    oldprogress = ''
+    progress = '0'
+    while True:
+      gfystatus = await GfycatClient.status(gfyname) 
+      
+      print(gfystatus)
+      if 'gfyname' in gfystatus:
+        gfylink = f'https://gfycat.com/{gfystatus["gfyname"]}'
         break
-      elif 'errorMessage' in r3json:  
+      elif 'errorMessage' in gfystatus: 
         field1 = embed.set_field_at(index=0,name='Status',value='FAILED',inline=True)
-        try:
-          embed.set_field_at(index=1,name='Error',value=f'{message.author.mention} Upload failed with Error: `{r3json["errorMessage"]["code"]} : {r3json["errorMessage"]["description"]}`',inline=True)
-        except:
-          embed.add_field(name='Error',value=f'`{r3json["errorMessage"]["code"]} : {r3json["errorMessage"]["description"]}`',inline=True)
+        embed.set_field_at(index=1,name='Error',value=f'{message.author.mention} Upload failed with Error: `{gfystatus["errorMessage"]["code"]} : {gfystatus["errorMessage"]["description"]}`',inline=True)
         embed.colour = discord.Color.red()
         await embedm.edit(embed=embed)
-        
         return
-      elif 'task' in r3json:
-        if r3json['task'] == 'encoding':
+      elif 'task' in gfystatus and gfystatus['task'] == 'encoding':
           if first:
             field1 = embed.set_field_at(index=0,name='Status',value='Encoding',inline=True)
             field2 = embed.add_field(name='Progress',value='0%',inline=True)
             first = False
-          if 'progress' in r3json:
-            pvalue = round(float(r3json['progress']) / 1.17  * 100,2)
+          if 'progress' in gfystatus:
+            pvalue = round(float(gfystatus['progress']) / 1.17  * 100,2)
             field2 = embed.set_field_at(index=1,name='Progress',value=f'{pvalue}%',inline=True)
-            progress = r3json['progress']
-          
+            progress = gfystatus['progress']
+        
           if oldprogress != progress:
             oldprogress = progress
             await embedm.edit(embed=embed)
           await asyncio.sleep(1)
       else:
           await asyncio.sleep(1)
-            
-  gfylink = f'https://gfycat.com/{gfyname}'
-  gfylog = await aiofiles.open(path.join(dirs['logs'],'gfy.log'),'a+',loop=client.loop)
-  await gfylog.write(f'\n{gfylink}')
-  await gfylog.close()
-   
+         
+    gfylog = await aiofiles.open(path.join(dirs['logs'],'gfy.log'),'a+',loop=client.loop)
+    await gfylog.write(f'\n{gfylink}')
+    await gfylog.close()
+          
   await embedm.delete()
   xtemp,_,_ = await getTemp()
-  await message.channel.send( f'Gfy taken at: {timestamp} \n**Temperature:** {round(xtemp,2)}°C \n{gfylink}')
-     
+
+  
+  if doembed:
+    await message.channel.send( f'Gif taken for {message.author.mention} at: {timestamp} \n**Temperature:** {round(xtemp,2)}°C',file=discord.File(filepathmp4))
+  else:
+    await message.channel.send( f'Gfy taken for {message.author.mention} at: {timestamp} \n**Temperature:** {round(xtemp,2)}°C \n{gfylink}')
+   
+  
+   
 async def cEffects(message,params={}):
   '''Lists all available image/video effects'''
   effectnames = "```"
@@ -396,7 +360,7 @@ async def cEffects(message,params={}):
 
 async def cReload(message,params={}):
   '''Reloads the bot. `OWNER ONLY`'''
-  if message.author != me:
+  if message.author != client.get_user(103294721119494144):
     await message.channel.send( f"I'm sorry {message.author.mention}, I'm afraid I can't do that." )
     return
   await message.add_reaction('\U0000267b')
@@ -408,7 +372,7 @@ async def cReload(message,params={}):
 
 async def cShutdown(message,params={}):  
   '''Turns off the bot hardware. `OWNER ONLY`'''
-  if message.author != me:
+  if message.author != client.get_user(103294721119494144):
     await message.channel.send( "I hope you never wake up." )
     return
   await message.add_reaction('\U0000267b')
@@ -450,6 +414,8 @@ async def cStatus(message,params={}):
   embed.add_field(name='Ping', value=f'{xping}ms', inline=True)
   embed.add_field(name='Local Time', value=datetime.now().strftime('%H:%M:%S UTC+1'), inline=True)
   await message.channel.send( embed=embed)
+  print(dir(camera.control.params[mmalobj.MMAL_PARAMETER_CAMERA_INFO]))
+  await message.channel.send(dir(camera.control.params[mmalobj.MMAL_PARAMETER_CAMERA_INFO]))
   
 async def cHelp(message,params={}):
   '''Get help for the bot'''
@@ -478,7 +444,7 @@ async def cDebug(message,params={}):
   async with aiofiles.open(path.join(dirs['logs'],'stdout.log'),"r") as logfile:
     logs = await logfile.readlines()
     try:
-      lines = max(1,min(20,int(params.get('lines') or params.get('l') or params.get('i')))),
+      lines = max(1,min(20,int(params.get('lines') or params.get('l') or params.get('i'))))
     except TypeError as e:
       lines = 10
     await message.channel.send( f"```{''.join(logs[-lines:])}```" )
@@ -500,16 +466,18 @@ if len(framefiles) > 0:
         print(f'FRAME DIRECTORY ({dirs["frames"]}) IS NOT EMPTY. REMOVE FILE {ffile}.')
         exit()
     
-if not lowpower: 
-  camera = mmalobj.MMALCamera()
-  encoder = mmalobj.MMALVideoEncoder()
-  encoder.format = 'h264'
-else:
-  camera = PiCamera()
+
+# camera = mmalobj.MMALCamera()
+camera = PiCamera()
+# encoder = mmalobj.MMALVideoEncoder()
+# encoder.format = 'h264'
+
+
 camera.close()
 
 client = discord.Client()
 session = aiohttp.ClientSession(loop=client.loop)
+GfycatClient = aiogfycat.GfycatClient(gfyid, gfysecret, client.loop, session)
 
 userswaiting = []
 commands = [
@@ -528,8 +496,6 @@ client.loop.create_task(iPic())
 
 @client.event
 async def on_ready():
-  global me
-  me = client.get_user(103294721119494144)
   print('Logged in as:')
   print(client.user.name)
   print(client.user.id)
