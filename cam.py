@@ -1,5 +1,5 @@
-
 import discord
+import discordfaby
 import asyncio
 import functools
 import subprocess
@@ -10,6 +10,7 @@ import io
 import string
 import os
 import netifaces
+from shlex import split as shsplit
 from sys import exc_info
 from os import path
 from os import listdir
@@ -18,6 +19,7 @@ from time import monotonic as time
 from picamera import PiCamera
 from datetime import datetime
 from random import random
+from random import randint
 
 from picamera import mmal, mmalobj
 
@@ -41,13 +43,11 @@ dirs = {
   'logs':'logs'
 }
 
-dirs = {k:path.join(dirs['home'],v) for k, v in dirs.items() if k != 'home'}
-
 
 async def getTemp():
   try:
     async with aiofiles.open(f'/sys/bus/w1/devices/{tempid}/w1_slave','r') as tempData:
-      param = re.search('t=(\d+)',await tempData.read())
+      param = re.search('t=(-?\d+)',await tempData.read())
       xtemp = int(param.group(1)) / 1000
   except:
     xtemp = -69
@@ -100,10 +100,6 @@ async def iPic():
     await asyncio.sleep(1-(time()-int(time())))
   # await asyncio.sleep(0)
 
-async def olog(message):
-  while not client.is_ready():
-    asyncio.wait(0.1)
-  await client.get_user(103294721119494144).send(message)
 
 def valideffect(effect):
   if str(effect).lower() in PiCamera.IMAGE_EFFECTS:
@@ -111,7 +107,7 @@ def valideffect(effect):
   else:
     return False
 
-async def cPic(message,params={}):
+async def cPic(client,message,params={}):
   '''Takes a live picture from the bot.
 Parameters: effectname, eff=effectname shutter=seconds night'''
   waittime = time()
@@ -198,7 +194,7 @@ Parameters: effectname, eff=effectname shutter=seconds night'''
         print(exc_info)
         raise
 
-async def cGif(message,params={}):
+async def cGif(client,message,params={}):
   '''Takes a live gif from the bot.
 Parameters: effectname, eff=effectname, s=length_seconds, fps=fps'''
   if not lowpower:
@@ -348,8 +344,7 @@ Parameters: effectname, eff=effectname, s=length_seconds, fps=fps'''
   else:
     await message.channel.send( f'Gfy taken for {message.author.mention} at: {timestamp} \n**Temperature:** {round(xtemp,2)}°C \n{gfylink}')
    
-   
-async def cEffects(message,params={}):
+async def cEffects(client,message,params={}):
   '''Lists all available image/video effects'''
   effectnames = "```"
   for effectname in PiCamera.IMAGE_EFFECTS:
@@ -357,32 +352,7 @@ async def cEffects(message,params={}):
   effectnames = f"{effectnames}```"
   await message.channel.send( effectnames )
 
-async def cReload(message,params={}):
-  '''Reloads the bot. `OWNER ONLY`'''
-  if message.author != client.get_user(103294721119494144):
-    await message.channel.send( f"I'm sorry {message.author.mention}, I'm afraid I can't do that." )
-    return
-  await message.add_reaction('\U0000267b')
-  async with aiofiles.open(path.join(dirs['logs'],'reload'),('w+')) as reloadfile:
-    await reloadfile.write(str(message.channel.id))
-  await client.logout()
-  session.close()
-  exit()
-
-async def cShutdown(message,params={}):  
-  '''Turns off the bot hardware. `OWNER ONLY`'''
-  if message.author != client.get_user(103294721119494144):
-    await message.channel.send( "I hope you never wake up." )
-    return
-  await message.add_reaction('\U0000267b')
-  async with aiofiles.open(path.join(dirs['logs'],'reload'),('w+')) as reloadfile:
-    await reloadfile.write(str(message.channel.id))
-  await client.logout()
-  session.close()
-  command = "/usr/bin/sudo /sbin/shutdown now"
-  subprocess.call(command.split())
-    
-async def cStatus(message,params={}):
+async def cStatus(client,message,params={}):
   '''Returns misc bot information'''
   xiface = None
   async with session.get("http://icanhazip.com/") as IP:
@@ -416,55 +386,7 @@ async def cStatus(message,params={}):
   print(dir(camera.control.params[mmalobj.MMAL_PARAMETER_CAMERA_INFO]))
   await message.channel.send(dir(camera.control.params[mmalobj.MMAL_PARAMETER_CAMERA_INFO]))
   
-async def cHelp(message,params={}):
-  '''Get help for the bot'''
-  hCommands = []
-  for command in commands:
-    for cmdName in command[0]:
-      if params.get(cmdName):
-        hCommands.append(command)
-        break
-  embed = discord.Embed() 
-  embed.title = f'Help for TimelapseBot'
-  embed.type = 'rich'
-  embed.description = 'To use a command mention me with the command name and any parameters. Named parameters are called by name=value' 
-  embed.colour = discord.Color.gold()
-  for command in hCommands or commands:
-    embed.add_field(name='/'.join(command[0]),value=command[1].__doc__,inline=False)
-  
-  await message.channel.send(embed=embed)
-    
-async def cPrefix(message,params={}):
-  '''mate there is no prefix'''
-  message.channel.send( 'No prefix, simply mention me anywhere in your command.')
-
-async def cDebug(message,params={}):
-  '''Prints the console output'''
-  async with aiofiles.open(path.join(dirs['logs'],'stdout.log'),"r") as logfile:
-    logs = await logfile.readlines()
-    try:
-      lines = max(1,min(20,int(params.get('lines') or params.get('l') or params.get('i'))))
-    except TypeError as e:
-      lines = 10
-    await message.channel.send( f"```{''.join(logs[-lines:])}```" )
-      
-      
-for k,dir in dirs.items():
-  if not os.path.exists(dir):
-    print(f'Did not find {dir}. Creating...')
-    os.mkdir(dir)
-
-  
-framefiles = listdir(dirs['frames'])
-if len(framefiles) > 0:
-  print(f'Frames directory not empty, deleting {len(framefiles)} files...')
-  for ffile in framefiles:
-      if path.splitext(ffile)[1] == '.jpg' or ffile == 'frames.txt':
-        os.remove(path.join(dirs['frames'],ffile))
-      else:
-        print(f'FRAME DIRECTORY ({dirs["frames"]}) IS NOT EMPTY. REMOVE FILE {ffile}.')
-        exit()
-    
+ 
 
 # camera = mmalobj.MMALCamera()
 camera = PiCamera()
@@ -472,27 +394,20 @@ camera = PiCamera()
 # encoder.format = 'h264'
 
 
+
+commands = {
+  'effects':[[],cEffects,False],
+  'gif':[['gfy','gfycat'],cGif,True],
+  'pic':[['picture'],cPic,True],
+  'status':[['info'],cStatus,False]
+}
+
+
 camera.close()
 
-client = discord.Client()
-session = aiohttp.ClientSession(loop=client.loop)
-GfycatClient = aiogfycat.GfycatClient(gfyid, gfysecret, client.loop, session)
-
-userswaiting = []
-commands = [
-  [['effects'],cEffects,False],
-  [['gif','gfy','gfycat'],cGif,True],
-  [['pic','picture'],cPic,True],
-  [['reload','relaod','restart'],cReload,False],
-  [['goodnight','shutdown'],cShutdown,False],
-  [['status','info'],cStatus,False],
-  [['help','commands'],cHelp,False],
-  [['prefix'],cPrefix,False],
-  [['debug','error'],cDebug,False]
-]
-
+client = discordfaby.Client(token=token,commands=commands,dirs=dirs)
 client.loop.create_task(iPic())
-
+GfycatClient = aiogfycat.Client(gfyid, gfysecret, loop=client.loop, session=client.session)
 @client.event
 async def on_ready():
   print('Logged in as:')
@@ -503,71 +418,21 @@ async def on_ready():
     print(guild.id)
     print(guild.name)
     print(guild.owner.name)
-    
-  for privatechannel in client.private_channels:
-    async for message in privatechannel.history(limit=100):
-      if discord.utils.get(message.reactions, me=True) is None and message.author != client.user:
-        await olog(message.author.mention+" "+message.content)   
-        await client.add_reaction(message, '\U00002705')
-  try:
-    if path.isfile(path.join(dirs['logs'],'reload')):
-      async with aiofiles.open(path.join(dirs['logs'],'reload'),('r')) as reloadfile:
-        async for message in client.get_channel(int(await reloadfile.read())).history(limit=20):
-          if discord.utils.get(message.reactions,emoji='\U0000267b', me=True):
-            await message.remove_reaction('\U0000267b',client.user)
-            await message.add_reaction('\U00002705')
-            break
-      os.remove(path.join(dirs['logs'],'reload'))
-  except Exception as e:
-    print(e)
-    pass
-    
-  async with session.get("http://icanhazip.com/") as IP:
-    IPtext = await IP.text()
-    await olog(f"I'm running :) {IPtext}")    
-  await client.change_presence(game=discord.Game(name='Live Pictures'))    
+ 
+  await client.change_presence(activity=discord.Game(name='Live Pictures'))    
+  await client.process_ready()
 
   
-@client.event 
-async def on_message(message):
-  if isinstance(message.channel,discord.abc.PrivateChannel):
-    if message.author != message.channel.me:
-      await olog(f'{message.author.mention}:{message.content}')
-      await client.add_reaction(message, '\U00002705')
-      await message.channel.send( "Sorry, no private commands at the moment." )
-    return
-  cmd = None
-  params = {}
-  if message.guild.me in message.mentions and message.author != message.guild.me:
-    smessage = message.content.split()
-    try:
-      for pmessage in smessage:
-        for command in commands:
-          if pmessage.lower() in command[0]:
-            if command[2]:
-              if message.author.id in userswaiting:
-                return
-              else:
-                userswaiting.append(message.author.id)
-            
-            cmd = command
-            smessage.remove(pmessage)
-            if not isinstance(message.channel,discord.abc.PrivateChannel):
-              await olog(f'{message.author.mention}\\_{pmessage}\\_{message.guild.name}\\_{message.guild.id}\\_{message.channel.mention}')
-            raise CommandFound
-    except CommandFound:
-      for pmessage in smessage:
-        param = re.search('([a-zA-Z0-9]+)=([a-zA-Z0-9\.]+)',pmessage)
-        if param:
-          params[param.group(1).lower()] = param.group(2) or True
-        else:
-          params[pmessage.lower()] = True
-             
-      await cmd[1](message=message,params=params)
-      if cmd[2]:
-        userswaiting.remove(message.author.id)
-      
-      
-      
-      
+framefiles = listdir(client.dirs['frames'])
+if len(framefiles) > 0:
+  print(f'Frames directory not empty, deleting {len(framefiles)} files...')
+  for ffile in framefiles:
+      if path.splitext(ffile)[1] == '.jpg' or ffile == 'frames.txt':
+        os.remove(path.join(client.dirs['frames'],ffile))
+      else:
+        print(f'FRAME DIRECTORY ({client.dirs["frames"]}) IS NOT EMPTY. REMOVE FILE {ffile}.')
+        exit()
+    
+  
+ 
 client.run(token)
